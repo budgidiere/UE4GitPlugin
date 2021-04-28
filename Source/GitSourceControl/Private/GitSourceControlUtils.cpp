@@ -890,14 +890,14 @@ static void ParseFileStatusResult(const FString& InPathToGitBinary, const FStrin
 				// usually means the file is unchanged,
 				FileState.WorkingCopyState = EWorkingCopyState::Unchanged;
 				// TODO LFS Debug log
-				UE_LOG(LogSourceControl, Log, TEXT("Status(%s) not found but exists => unchanged"), *File);
+				//UE_LOG(LogSourceControl, Log, TEXT("Status(%s) not found but exists => unchanged"), *File);
 			}
 			else
 			{
 				// but also the case for newly created content: there is no file on disk until the content is saved for the first time
 				FileState.WorkingCopyState = EWorkingCopyState::NotControlled;
 				// TODO LFS Debug log
-				UE_LOG(LogSourceControl, Log, TEXT("Status(%s) not found and does not exists => new/not controled"), *File);
+				//UE_LOG(LogSourceControl, Log, TEXT("Status(%s) not found and does not exists => new/not controled"), *File);
 			}
 		}
 		if(InLockedFiles.Contains(File))
@@ -912,7 +912,7 @@ static void ParseFileStatusResult(const FString& InPathToGitBinary, const FStrin
 				FileState.LockState = ELockState::LockedOther;
 			}
 			// TODO LFS Debug log
-			UE_LOG(LogSourceControl, Log, TEXT("Status(%s) Locked by '%s'"), *File, *FileState.LockUser);
+			//UE_LOG(LogSourceControl, Log, TEXT("Status(%s) Locked by '%s'"), *File, *FileState.LockUser);
 		}
 		else
 		{
@@ -920,7 +920,7 @@ static void ParseFileStatusResult(const FString& InPathToGitBinary, const FStrin
 			// TODO LFS Debug log
 			if (InUsingLfsLocking)
 			{
-				UE_LOG(LogSourceControl, Log, TEXT("Status(%s) Not Locked"), *File);
+				//UE_LOG(LogSourceControl, Log, TEXT("Status(%s) Not Locked"), *File);
 			}
 		}
 		FileState.TimeStamp = Now;
@@ -1056,6 +1056,15 @@ bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InReposito
 	{
 		// "git status" can only detect renamed and deleted files when it operate on a folder, so use one folder path for all files in a directory
 		const FString Path = FPaths::GetPath(*Files.Value[0]);
+
+		// Skip querying anything outside our git root
+		// We get queries for all the Engine content dirs too and they take ages and don't work anyway
+		if (!FPaths::IsUnderDirectory(Path, InRepositoryRoot))
+		{
+			UE_LOG(LogSourceControl, Log, TEXT("Skipping %s because it's not a subdir of git repo %s"), *Path, *InRepositoryRoot);
+			continue;
+		}
+
 		TArray<FString> OnePath;
 		// Only one file: optim very useful for the .uproject file at the root to avoid parsing the whole repository
 		// (works only if the file exists)
