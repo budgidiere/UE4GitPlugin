@@ -1,5 +1,3 @@
-/Binaries/*/*.pdb
-/Binaries/*/*Debug*
-/Binaries/*/*.dylib
-/Binaries/*/*.modules
+# PBGet
+Binaries/
 /Intermediate

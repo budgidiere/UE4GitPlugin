@@ -38,8 +38,11 @@ void FGitSourceControlProvider::Init(bool bForceConnection)
 
 		CheckGitAvailability();
 
-		const FGitSourceControlModule& GitSourceControl = FModuleManager::GetModuleChecked<FGitSourceControlModule>("GitSourceControl");
-		bUsingGitLfsLocking = GitSourceControl.AccessSettings().IsUsingGitLfsLocking();
+		if (UsingGitLfsLocking == -1)
+		{
+			const FGitSourceControlModule& GitSourceControl = FModuleManager::GetModuleChecked<FGitSourceControlModule>("GitSourceControl");
+			UsingGitLfsLocking = GitSourceControl.AccessSettings().IsUsingGitLfsLocking();
+		}
 	}
 
 	// bForceConnection: not used anymore
@@ -127,7 +130,7 @@ TSharedRef<FGitSourceControlState, ESPMode::ThreadSafe> FGitSourceControlProvide
 	else
 	{
 		// cache an unknown state for this item
-		TSharedRef<FGitSourceControlState, ESPMode::ThreadSafe> NewState = MakeShareable( new FGitSourceControlState(Filename, bUsingGitLfsLocking) );
+		TSharedRef<FGitSourceControlState, ESPMode::ThreadSafe> NewState = MakeShareable( new FGitSourceControlState(Filename, UsingGitLfsLocking == 1) );
 		StateCache.Add(Filename, NewState);
 		return NewState;
 	}
@@ -175,7 +178,20 @@ ECommandResult::Type FGitSourceControlProvider::GetState( const TArray<FString>&
 
 	if(InStateCacheUsage == EStateCacheUsage::ForceUpdate)
 	{
-		Execute(ISourceControlOperation::Create<FUpdateStatus>(), AbsoluteFiles);
+		TArray<FString> ForceUpdate;
+		for(FString Path : InFiles)
+		{
+			// Remove the path from the cache, so it's not ignored the next time we force check.
+			// If the file isn't in the cache, force update it now.
+			if (!RemoveFileFromIgnoreForceCache(Path))
+			{
+				ForceUpdate.Add(Path);
+			}
+		}
+		if (ForceUpdate.Num() > 0)
+		{
+			Execute(ISourceControlOperation::Create<FUpdateStatus>(), ForceUpdate);
+		}
 	}
 
 	for(const auto& AbsoluteFile : AbsoluteFiles)
@@ -203,6 +219,16 @@ TArray<FSourceControlStateRef> FGitSourceControlProvider::GetCachedStateByPredic
 bool FGitSourceControlProvider::RemoveFileFromCache(const FString& Filename)
 {
 	return StateCache.Remove(Filename) > 0;
+}
+
+bool FGitSourceControlProvider::AddFileToIgnoreForceCache(const FString& Filename)
+{
+	return IgnoreForceCache.Add(Filename) > 0;
+}
+
+bool FGitSourceControlProvider::RemoveFileFromIgnoreForceCache(const FString& Filename)
+{
+	return IgnoreForceCache.Remove(Filename) > 0;
 }
 
 /** Get files in cache */
@@ -284,7 +310,7 @@ void FGitSourceControlProvider::CancelOperation( const TSharedRef<ISourceControl
 
 bool FGitSourceControlProvider::UsesLocalReadOnlyState() const
 {
-	return bUsingGitLfsLocking; // Git LFS Lock uses read-only state
+	return UsingGitLfsLocking == 1; // Git LFS Lock uses read-only state
 }
 
 bool FGitSourceControlProvider::UsesChangelists() const
@@ -294,7 +320,7 @@ bool FGitSourceControlProvider::UsesChangelists() const
 
 bool FGitSourceControlProvider::UsesCheckout() const
 {
-	return bUsingGitLfsLocking; // Git LFS Lock uses read-only state
+	return UsingGitLfsLocking == 1; // Git LFS Lock uses read-only state
 }
 
 TSharedPtr<IGitSourceControlWorker, ESPMode::ThreadSafe> FGitSourceControlProvider::CreateWorker(const FName& InOperationName) const
@@ -322,10 +348,12 @@ void FGitSourceControlProvider::OutputCommandMessages(const FGitSourceControlCom
 		SourceControlLog.Error(FText::FromString(InCommand.ErrorMessages[ErrorIndex]));
 	}
 
+#if UE_BUILD_DEBUG
 	for(int32 InfoIndex = 0; InfoIndex < InCommand.InfoMessages.Num(); ++InfoIndex)
 	{
 		SourceControlLog.Info(FText::FromString(InCommand.InfoMessages[InfoIndex]));
 	}
+#endif
 }
 
 void FGitSourceControlProvider::UpdateRepositoryStatus(const class FGitSourceControlCommand& InCommand)
@@ -345,6 +373,7 @@ void FGitSourceControlProvider::Tick()
 	for(int32 CommandIndex = 0; CommandIndex < CommandQueue.Num(); ++CommandIndex)
 	{
 		FGitSourceControlCommand& Command = *CommandQueue[CommandIndex];
+
 		if(Command.bExecuteProcessed)
 		{
 			// Remove command from the queue
@@ -401,6 +430,7 @@ TSharedRef<class SWidget> FGitSourceControlProvider::MakeSettingsWidget() const
 ECommandResult::Type FGitSourceControlProvider::ExecuteSynchronousCommand(FGitSourceControlCommand& InCommand, const FText& Task)
 {
 	ECommandResult::Type Result = ECommandResult::Failed;
+	int i = 0;
 
 	// Display the progress dialog if a string was provided
 	{
@@ -410,42 +440,44 @@ ECommandResult::Type FGitSourceControlProvider::ExecuteSynchronousCommand(FGitSo
 		IssueCommand( InCommand );
 
 		// ... then wait for its completion (thus making it synchronous)
-		while(!InCommand.bExecuteProcessed)
+		while (CommandQueue.Contains(&InCommand))
 		{
 			// Tick the command queue and update progress.
 			Tick();
 
-			Progress.Tick();
+			if (i >= 20) {
+				Progress.Tick();
+				i = 0;
+			}
+			i++;
 
 			// Sleep so we don't busy-wait so much.
 			FPlatformProcess::Sleep(0.01f);
 		}
 
-		// always do one more Tick() to make sure the command queue is cleaned up.
-		Tick();
-
-		if(InCommand.bCommandSuccessful)
+		if (InCommand.bCommandSuccessful)
 		{
 			Result = ECommandResult::Succeeded;
 		}
+		else
+		{
+			FMessageDialog::Open( EAppMsgType::Ok, LOCTEXT("Git_ServerUnresponsive", "Git LFS server command failed. Please check the output log for more information.") );
+			UE_LOG(LogSourceControl, Error, TEXT("Command '%s' Failed!"), *InCommand.Operation->GetName().ToString());
+		}
 	}
 
-	// Delete the command now (asynchronous commands are deleted in the Tick() method)
-	check(!InCommand.bAutoDelete);
-
-	// ensure commands that are not auto deleted do not end up in the command queue
-	if ( CommandQueue.Contains( &InCommand ) )
+	// Delete the command now if not marked as auto-delete
+	if (!InCommand.bAutoDelete)
 	{
-		CommandQueue.Remove( &InCommand );
+		delete &InCommand;
 	}
-	delete &InCommand;
 
 	return Result;
 }
 
-ECommandResult::Type FGitSourceControlProvider::IssueCommand(FGitSourceControlCommand& InCommand)
+ECommandResult::Type FGitSourceControlProvider::IssueCommand(FGitSourceControlCommand& InCommand, const bool bSynchronous)
 {
-	if(GThreadPool != nullptr)
+	if (!bSynchronous && GThreadPool != nullptr)
 	{
 		// Queue this to our worker thread(s) for resolving
 		GThreadPool->AddQueuedWork(&InCommand);
@@ -454,12 +486,12 @@ ECommandResult::Type FGitSourceControlProvider::IssueCommand(FGitSourceControlCo
 	}
 	else
 	{
-		FText Message(LOCTEXT("NoSCCThreads", "There are no threads available to process the source control command."));
+		UE_LOG(LogSourceControl, Log, TEXT("There are no threads available to process the source control command '%s'. Running synchronously."), *InCommand.Operation->GetName().ToString());
+		InCommand.bCommandSuccessful = InCommand.DoWork();
+		InCommand.Worker->UpdateStates();
+		OutputCommandMessages(InCommand);
 
-		FMessageLog("SourceControl").Error(Message);
-		InCommand.bCommandSuccessful = false;
-		InCommand.Operation->AddErrorMessge(Message);
-
+		// Callback now if present. When asynchronous, this callback gets called from Tick().
 		return InCommand.ReturnResults();
 	}
 }

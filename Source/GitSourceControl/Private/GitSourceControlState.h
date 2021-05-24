@@ -46,10 +46,10 @@ public:
 		: LocalFilename(InLocalFilename)
 		, WorkingCopyState(EWorkingCopyState::Unknown)
 		, LockState(ELockState::Unknown)
-		, bUsingGitLfsLocking(InUsingLfsLocking)
 		, bNewerVersionOnServer(false)
 		, TimeStamp(0)
 	{
+		bUsingGitLfsLocking = InUsingLfsLocking && !InLocalFilename.Contains(TEXT(".ini")) && !InLocalFilename.Contains(TEXT(".uproject"));
 	}
 
 	/** ISourceControlState interface */

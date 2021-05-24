@@ -144,16 +144,23 @@ public:
 	/** Get files in cache */
 	TArray<FString> GetFilesInCache();
 
-private:
+	bool AddFileToIgnoreForceCache(const FString& Filename);
 
+	bool RemoveFileFromIgnoreForceCache(const FString& Filename);
+
+private:
 	/** Is git binary found and working. */
 	bool bGitAvailable;
 
 	/** Is git repository found. */
 	bool bGitRepositoryFound;
 
-	/** Is LFS File Locking enabled? */
-	bool bUsingGitLfsLocking = false;
+	/** Is LFS locking enabled?
+	 * -1: uninitialized
+	 * 0: no
+	 * 1: yes
+	*/
+	int UsingGitLfsLocking = -1;
 
 	/** Helper function for Execute() */
 	TSharedPtr<class IGitSourceControlWorker, ESPMode::ThreadSafe> CreateWorker(const FName& InOperationName) const;
@@ -161,7 +168,7 @@ private:
 	/** Helper function for running command synchronously. */
 	ECommandResult::Type ExecuteSynchronousCommand(class FGitSourceControlCommand& InCommand, const FText& Task);
 	/** Issue a command asynchronously if possible. */
-	ECommandResult::Type IssueCommand(class FGitSourceControlCommand& InCommand);
+	ECommandResult::Type IssueCommand(class FGitSourceControlCommand& InCommand, const bool bSynchronous = false );
 
 	/** Output any messages this command holds */
 	void OutputCommandMessages(const class FGitSourceControlCommand& InCommand) const;
@@ -207,4 +214,10 @@ private:
 
 	/** Source Control Menu Extension */
 	FGitSourceControlMenu GitSourceControlMenu;
+
+	/**
+		Ignore these files when forcing status updates. We add to this list when we've just updated the status already.
+		UE4's SourceControl has a habit of performing a double status update, immediately after an operation.
+	*/
+	TArray<FString> IgnoreForceCache;
 };
