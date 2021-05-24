@@ -952,7 +952,7 @@ static void ParseFileStatusResult(const FString& InPathToGitBinary, const FStrin
 #if UE_BUILD_DEBUG
 			if (InUsingLfsLocking)
 			{
-				//UE_LOG(LogSourceControl, Log, TEXT("Status(%s) Not Locked"), *File);
+				UE_LOG(LogSourceControl, Log, TEXT("Status(%s) Not Locked"), *File);
 			}
 #endif
 		}
